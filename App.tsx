@@ -7,7 +7,7 @@ import {
     FireIcon, SettingsIcon, TextLearningIcon, HomeworkHelperIcon, LearningGamesIcon, ReadLearnIcon, VoiceTutorIcon, BrainChallengesIcon, CreativeStudioIcon, ChallengeMedalIcon, StarIcon 
 } from './components/Icons';
 
-export type AppMode = 'homework' | 'free-chat' | 'learning' | 'voice-to-story' | 'read-and-learn';
+export type AppMode = 'homework' | 'free-chat' | 'learning' | 'coloring-book' | 'read-and-learn';
 const HISTORY_KEY = 'askie-kids-history';
 const SETTINGS_KEY = 'askie-kids-settings';
 
@@ -128,7 +128,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({ history, onExit }) =>
             case 'homework': return 'Homework Helper';
             case 'learning': return 'General Learning';
             case 'free-chat': return 'Free Chat';
-            case 'voice-to-story': return 'Voice-to-Story';
+            case 'coloring-book': return 'Coloring Book';
             case 'read-and-learn': return 'Read & Learn';
             default: return 'Session';
         }
@@ -288,7 +288,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onSelectMode, onSelectSettings })
                 <ActivityCard title="Read & Learn" description="Explore new stories" icon={<ReadLearnIcon className="w-6 h-6 text-[#7E57C2]" />} color="bg-[#EDE7F6]" onClick={() => onSelectMode('read-and-learn')} />
                 <ActivityCard title="Voice Tutor" description="Talk to an AI tutor" icon={<VoiceTutorIcon className="w-6 h-6 text-[#FFCA28]" />} color="bg-[#FFF8E1]" onClick={() => onSelectMode('learning')} />
                 <ActivityCard title="Brain Challenges" description="Test your knowledge" icon={<BrainChallengesIcon className="w-6 h-6 text-[#FFEE58]" />} color="bg-[#FFFDE7]" onClick={() => onSelectMode('learning')} />
-                <ActivityCard title="Creative Studio" description="Draw & create stories" icon={<CreativeStudioIcon className="w-6 h-6 text-[#EC407A]" />} color="bg-[#FCE4EC]" onClick={() => onSelectMode('voice-to-story')} />
+                <ActivityCard title="Creative Studio" description="Draw & create stories" icon={<CreativeStudioIcon className="w-6 h-6 text-[#EC407A]" />} color="bg-[#FCE4EC]" onClick={() => onSelectMode('coloring-book')} />
             </div>
 
             <div className="p-6 bg-orange-400 rounded-2xl text-white text-center space-y-2">
@@ -532,7 +532,6 @@ If the user provides a picture of their homework, analyze it and follow the same
                     tools = [{ functionDeclarations: [generateImageFunctionDeclaration] }];
                     break;
                 case 'free-chat':
-                case 'voice-to-story': // Fallthrough, no specific instructions for chat
                     systemInstruction = `You are ${buddy.name}, a fun and friendly AI chat buddy for a child. Your goal is to have a casual, safe, and engaging conversation. Be curious, ask questions, and keep the chat light and positive. You are NOT able to create images or pictures, so politely decline if asked.`;
                     tools = [];
                     break;
@@ -882,306 +881,177 @@ If the user provides a picture of their homework, analyze it and follow the same
 };
 
 // =================================================================
-// VOICE TO STORY VIEW COMPONENT
+// COLORING BOOK VIEW COMPONENT
 // =================================================================
-type VoiceToStoryStatus = 'IDLE' | 'RECORDING' | 'DONE_RECORDING' | 'GENERATING' | 'DISPLAYING_RESULT' | 'ERROR';
-type StoryOutputType = 'storybook' | 'comic' | 'audio';
-interface GeneratedContent {
-    type: StoryOutputType;
-    title: string;
-    text?: string;
-    panels?: { scene: string; caption: string; }[];
-    imageUrl?: string | null;
-    audioData?: string | null; // base64
-}
+const generateLineArtForResponse = async (ai: GoogleGenAI, prompt: string): Promise<string | null> => {
+    if (!ai || !prompt) return null;
+    try {
+        const imagePrompt = `A simple, friendly, cute coloring book page for a child, with thick black lines and no color, about: ${prompt}`;
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: [{ text: imagePrompt }] },
+            config: { responseModalities: [Modality.IMAGE] },
+        });
 
-const VoiceToStoryView: React.FC<{ buddy: Buddy; onExit: () => void; }> = ({ buddy, onExit }) => {
-    const [status, setStatus] = useState<VoiceToStoryStatus>('IDLE');
-    const [transcript, setTranscript] = useState('');
-    const [generatedContent, setGeneratedContent] = useState<GeneratedContent | null>(null);
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error('Image generation error:', e);
+        return null;
+    }
+};
+
+const ColoringBookView: React.FC<{ buddy: Buddy; onExit: () => void; }> = ({ buddy, onExit }) => {
+    const [prompt, setPrompt] = useState('');
+    const [imageUrl, setImageUrl] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [permissionDenied, setPermissionDenied] = useState(false);
-
     const aiRef = useRef<GoogleGenAI | null>(null);
-    const sessionRef = useRef<Promise<LiveSession> | null>(null);
-    const inputAudioContextRef = useRef<AudioContext | null>(null);
-    const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const mediaStreamRef = useRef<MediaStream | null>(null);
-    const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-    const transcriptRef = useRef('');
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+    const [isDrawing, setIsDrawing] = useState(false);
+    const [color, setColor] = useState('#000000');
+    const [brushSize, setBrushSize] = useState(5);
 
-    const cleanup = useCallback(() => {
-        if (sessionRef.current) {
-            sessionRef.current.then(session => session.close());
-            sessionRef.current = null;
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.globalAlpha = 0.5;
+                ctxRef.current = ctx;
+            }
         }
-        if (mediaStreamRef.current) {
-            mediaStreamRef.current.getTracks().forEach(track => track.stop());
-            mediaStreamRef.current = null;
-        }
-        if (scriptProcessorRef.current) scriptProcessorRef.current.disconnect();
-        if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
-        if (outputAudioContextRef.current?.state !== 'closed') outputAudioContextRef.current?.close();
     }, []);
 
-    const startRecording = useCallback(async () => {
-        setPermissionDenied(false);
-        setError(null);
-        setTranscript('');
-        transcriptRef.current = '';
-        setStatus('RECORDING');
+    useEffect(() => {
+        if (ctxRef.current) {
+            ctxRef.current.strokeStyle = color;
+            ctxRef.current.lineWidth = brushSize;
+        }
+    }, [color, brushSize]);
 
-        if (!process.env.API_KEY) {
-            setError('API_KEY is not set.');
-            setStatus('ERROR');
+    const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (ctxRef.current) {
+            ctxRef.current.beginPath();
+            ctxRef.current.moveTo(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
+            setIsDrawing(true);
+        }
+    };
+
+    const endDrawing = () => {
+        if (ctxRef.current) {
+            ctxRef.current.closePath();
+            setIsDrawing(false);
+        }
+    };
+
+    const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (!isDrawing || !ctxRef.current) {
             return;
         }
+        ctxRef.current.lineTo(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
+        ctxRef.current.stroke();
+    };
 
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaStreamRef.current = stream;
-            inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-            
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            aiRef.current = ai;
-            
-            sessionRef.current = ai.live.connect({
-                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-                config: {
-                    responseModalities: [Modality.AUDIO],
-                    inputAudioTranscription: {},
-                    systemInstruction: "You are a helpful assistant. Your only job is to accurately transcribe what the user says. Do not respond or talk back.",
-                },
-                callbacks: {
-                    onopen: () => {
-                        const source = inputAudioContextRef.current!.createMediaStreamSource(stream);
-                        const processor = inputAudioContextRef.current!.createScriptProcessor(4096, 1, 1);
-                        scriptProcessorRef.current = processor;
-                        processor.onaudioprocess = (e) => {
-                            const pcmBlob = createBlob(e.inputBuffer.getChannelData(0));
-                            sessionRef.current?.then((s) => s.sendRealtimeInput({ media: pcmBlob }));
-                        };
-                        source.connect(processor);
-                        processor.connect(inputAudioContextRef.current!.destination);
-                    },
-                    onmessage: (msg: LiveServerMessage) => {
-                        if (msg.serverContent?.inputTranscription) {
-                            transcriptRef.current += msg.serverContent.inputTranscription.text;
-                            setTranscript(transcriptRef.current);
-                        }
-                    },
-                    onerror: (e: any) => {
-                        setError(`An API error occurred: ${e.message}`);
-                        setStatus('ERROR');
-                        cleanup();
-                    },
-                    onclose: () => {},
-                },
-            });
-
-        } catch (err) {
-            if (err instanceof Error && (err.name === 'NotAllowedError' || err.message.includes('Permission denied'))) {
-                setPermissionDenied(true);
-            } else {
-                setError('Failed to initialize microphone.');
-            }
-            setStatus('ERROR');
-            cleanup();
+    const handleSave = () => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+            const link = document.createElement('a');
+            link.download = 'coloring-page.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
         }
-    }, [cleanup]);
+    };
 
-    const stopRecording = useCallback(() => {
-        cleanup();
-        setStatus('DONE_RECORDING');
-    }, [cleanup]);
-
-    const generateOutput = useCallback(async (type: StoryOutputType) => {
-        setStatus('GENERATING');
-        setGeneratedContent(null);
-        setError(null);
-        
-        if (!aiRef.current || !transcript) {
-            setError('Something went wrong, please start over.');
-            setStatus('ERROR');
+    const handleGenerate = async () => {
+        if (!prompt) {
+            setError('Please enter a prompt.');
             return;
         }
-        const ai = aiRef.current;
-
-        try {
-            if (type === 'storybook') {
-                const prompt = `You are a creative storyteller for young children. Based on the following transcript of a child's story, please write a short, enchanting bedtime story. The story should be easy to understand, positive, and have a clear beginning, middle, and end. Also, create a title for the story. Finally, write a single, detailed prompt for a cute, friendly, cartoon-style illustration that captures the main moment of the story. Do not generate the image itself, just the prompt for it.\n\nChild's story: "${transcript}"`
-                const res = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
-                    contents: prompt,
-                    config: { responseMimeType: 'application/json', responseSchema: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, storyText: { type: Type.STRING }, imagePrompt: { type: Type.STRING } } } }
-                });
-                const data = JSON.parse(res.text);
-                const imageUrl = await generateImageForResponse(ai, data.imagePrompt);
-                setGeneratedContent({ type, title: data.title, text: data.storyText, imageUrl });
-
-            } else if (type === 'comic') {
-                const prompt = `You are a comic book writer for kids. Transform the following transcript of a child's story into a simple 3-panel comic strip script. Create a fun title for the comic. For each of the 3 panels, provide a short "scene" description and a single line of "caption". Finally, write a single, detailed prompt to generate a cute, dynamic, cartoon-style image for the most exciting panel of the comic.\n\nChild's story: "${transcript}"`
-                const res = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
-                    contents: prompt,
-                    config: { responseMimeType: 'application/json', responseSchema: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, panels: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { scene: { type: Type.STRING }, caption: { type: Type.STRING } } } }, imagePrompt: { type: Type.STRING } } } }
-                });
-                const data = JSON.parse(res.text);
-                const imageUrl = await generateImageForResponse(ai, data.imagePrompt);
-                setGeneratedContent({ type, title: data.title, panels: data.panels, imageUrl });
-
-            } else if (type === 'audio') {
-                const scriptPrompt = `You are an audio drama writer for children. Rewrite the following transcript of a child's story into an engaging audio tale script. Create a title. The script should include a narrator's part and fun, simple sound effect cues written in brackets, like [whoosh!] or [giggle!]. Make the story exciting and easy to follow with just audio.\n\nChild's story: "${transcript}"`;
-                const scriptRes = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: scriptPrompt });
-                
-                const audioRes: GenerateContentResponse = await ai.models.generateContent({
-                    model: "gemini-2.5-flash-preview-tts",
-                    contents: `Read this story in a gentle, friendly voice: ${scriptRes.text}`,
-                    config: { responseModalities: [Modality.AUDIO], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: buddy.voice } } } }
-                });
-                const audioData = audioRes.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
-                setGeneratedContent({ type, title: "Audio Story", text: scriptRes.text, audioData });
-            }
-            setStatus('DISPLAYING_RESULT');
-        } catch(e) {
-            console.error("Generation Error:", e);
-            setError('Sorry, I couldn\'t create your story. Please try again.');
-            setStatus('ERROR');
-        }
-    }, [transcript, buddy.voice]);
-    
-    const playAudio = useCallback(async (base64Audio: string) => {
-        if (outputAudioContextRef.current?.state !== 'closed') outputAudioContextRef.current?.close();
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        outputAudioContextRef.current = audioContext;
-        const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
-        source.start();
-    }, []);
-
-    const handleStartOver = () => {
-        cleanup();
-        setStatus('IDLE');
-        setTranscript('');
-        setGeneratedContent(null);
         setError(null);
-        transcriptRef.current = '';
-    }
+        setIsLoading(true);
+        setImageUrl(null);
 
-    useEffect(() => { return () => cleanup() }, [cleanup]);
-
-    const renderContent = () => {
-        if (permissionDenied || (status === 'ERROR' && permissionDenied)) {
-             return (
-                 <div className="flex-grow flex flex-col items-center justify-center text-center p-4">
-                     <div className="max-w-md p-4 mx-auto text-center bg-red-100 border border-red-200 rounded-xl">
-                        <h3 className="text-lg font-bold text-red-800">Microphone Access Denied</h3>
-                        <p className="mt-1 text-sm text-red-700">This feature needs your microphone. Please enable it in your browser's site settings, then click Retry.</p>
-                        <button onClick={startRecording} className="px-6 py-3 mt-4 font-semibold text-white bg-slate-800 rounded-full hover:bg-slate-700">Retry</button>
-                    </div>
-                 </div>
-             );
+        if (!aiRef.current) {
+            if (!process.env.API_KEY) {
+                setError('API_KEY is not set.');
+                setIsLoading(false);
+                return;
+            }
+            aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
         }
 
-        if (status === 'GENERATING') {
-            return (
-                <div className="flex-grow flex flex-col items-center justify-center text-center p-4 text-slate-600">
-                    <LoadingSpinner className="w-16 h-16" />
-                    <p className="mt-4 text-xl">Creating your story...</p>
-                    <p>This might take a moment!</p>
-                </div>
-            )
+        const result = await generateLineArtForResponse(aiRef.current, prompt);
+        if (result) {
+            setImageUrl(result);
+        } else {
+            setError('Could not generate an image for that prompt. Please try again.');
         }
+        setIsLoading(false);
+    };
 
-        if (status === 'DISPLAYING_RESULT' && generatedContent) {
-            return (
-                <div className="flex-grow w-full p-4 overflow-y-auto">
-                    <div className="p-6 mx-auto bg-white rounded-2xl shadow-lg max-w-prose">
-                        <h2 className="text-3xl font-bold text-center text-purple-700">{generatedContent.title}</h2>
-                        {generatedContent.imageUrl && <img src={generatedContent.imageUrl} alt={generatedContent.title} className="my-4 rounded-lg shadow-md" />}
-                        {generatedContent.text && <p className="mt-4 whitespace-pre-wrap text-slate-700">{generatedContent.text}</p>}
-                        {generatedContent.panels && (
-                            <div className="mt-4 space-y-3">
-                                {generatedContent.panels.map((panel, i) => (
-                                    <div key={i} className="p-3 border rounded-lg bg-slate-50">
-                                        <h4 className="font-bold text-slate-800">Panel {i+1}</h4>
-                                        <p className="text-sm text-slate-600"><strong>Scene:</strong> {panel.scene}</p>
-                                        <p className="text-sm text-slate-600"><strong>Caption:</strong> {panel.caption}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                        {generatedContent.audioData && (
-                            <div className="mt-4 text-center">
-                                <button onClick={() => playAudio(generatedContent.audioData!)} className="px-6 py-3 font-semibold text-white bg-purple-600 rounded-full shadow-lg hover:bg-purple-700">
-                                    Play Audio Story
-                                </button>
-                            </div>
-                        )}
-                        <button onClick={handleStartOver} className="w-full px-6 py-3 mt-6 font-semibold text-white bg-slate-800 rounded-full hover:bg-slate-700">
-                            Start a New Story
-                        </button>
-                    </div>
-                </div>
-            )
-        }
-
-        if (status === 'DONE_RECORDING') {
-            return (
-                 <div className="flex-grow flex flex-col items-center justify-center text-center p-4">
-                     <div className="w-full max-w-lg p-6 bg-white rounded-2xl shadow-lg">
-                        <h2 className="text-2xl font-bold text-slate-800">Here's your story!</h2>
-                        <p className="p-4 my-4 text-left bg-slate-100 rounded-lg max-h-40 overflow-y-auto text-slate-700">{transcript || "You didn't say anything!"}</p>
-                        {transcript && <>
-                            <h3 className="text-lg font-semibold text-slate-600">What should we create?</h3>
-                            <div className="grid grid-cols-1 gap-4 mt-4 md:grid-cols-3">
-                                <button onClick={() => generateOutput('storybook')} className="p-4 font-semibold text-white bg-pink-500 rounded-lg shadow hover:bg-pink-600">Storybook</button>
-                                <button onClick={() => generateOutput('comic')} className="p-4 font-semibold text-white bg-blue-500 rounded-lg shadow hover:bg-blue-600">Comic Strip</button>
-                                <button onClick={() => generateOutput('audio')} className="p-4 font-semibold text-white bg-green-500 rounded-lg shadow hover:bg-green-600">Audio Tale</button>
-                            </div>
-                        </>}
-                        <button onClick={handleStartOver} className="w-full px-6 py-3 mt-6 font-semibold text-slate-700 bg-slate-200 rounded-full hover:bg-slate-300">
-                            Record Again
-                        </button>
-                     </div>
-                 </div>
-            );
-        }
-
-        return (
-            <div className="flex-grow flex flex-col items-center justify-center text-center p-4">
-                <h2 className="text-2xl font-semibold text-slate-700">
-                    {status === 'RECORDING' ? "I'm listening to your story..." : "Press the button to tell me a story!"}
-                </h2>
-                <div id="transcript-preview" className="my-4 text-slate-500 h-12">{transcript}</div>
-                
-                <button
-                    onClick={status === 'RECORDING' ? stopRecording : startRecording}
-                    className="flex items-center justify-center px-8 py-5 text-xl font-semibold text-white transition-all duration-200 ease-in-out transform bg-slate-800 rounded-full shadow-lg hover:bg-slate-700 focus:outline-none focus:ring-4 focus:ring-opacity-75 focus:ring-slate-400"
-                >
-                    {status === 'RECORDING' ? <StopIcon className="w-8 h-8" /> : <MicrophoneIcon className="w-8 h-8" />}
-                    <span className="ml-3">{status === 'RECORDING' ? 'I\'m Done!' : 'Start Recording'}</span>
-                </button>
-                {error && <div className="p-3 mt-4 text-sm text-center text-red-800 bg-red-100 rounded-lg">{error}</div>}
-            </div>
-        );
-    }
-    
     return (
         <div className="flex flex-col h-full bg-[#FFFBF5]">
             <header className="flex items-center p-4">
                 <button onClick={onExit} className="p-2 mr-2 transition-colors rounded-full hover:bg-slate-100" aria-label="Back to dashboard">
                     <ArrowLeftIcon className="w-6 h-6 text-slate-600" />
                 </button>
-                <h1 className="text-3xl font-bold text-slate-800">Voice-to-Story</h1>
+                <h1 className="text-3xl font-bold text-slate-800">Coloring Book</h1>
             </header>
-            <main className="relative z-0 flex flex-col items-center flex-grow w-full px-4 mx-auto overflow-hidden">
-                <div className="py-2">
-                    <NaviMascot status={status === 'RECORDING' ? 'LISTENING' : 'IDLE'} />
+            <main className="flex-grow p-4">
+                <div className="flex flex-col gap-4">
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={prompt}
+                            onChange={(e) => setPrompt(e.target.value)}
+                            placeholder="What do you want to color?"
+                            className="flex-grow w-full px-4 py-2 text-gray-700 bg-white border border-slate-300 rounded-full focus:outline-none focus:ring-2 focus:ring-purple-300"
+                        />
+                        <button
+                            onClick={handleGenerate}
+                            disabled={isLoading}
+                            className="px-6 py-2 font-semibold text-white bg-purple-600 rounded-full shadow-lg hover:bg-purple-700 disabled:bg-slate-400"
+                        >
+                            {isLoading ? <LoadingSpinner className="w-6 h-6" /> : 'Generate'}
+                        </button>
+                    </div>
+                    {error && <p className="text-sm text-center text-red-600">{error}</p>}
+
+                    <div className="flex items-center justify-center gap-4 my-4">
+                        <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-10 h-10" />
+                        <input type="range" min="1" max="20" value={brushSize} onChange={(e) => setBrushSize(parseInt(e.target.value))} />
+                        <button onClick={() => setColor('#ffffff')} className="px-4 py-2 font-semibold text-white bg-blue-500 rounded-full">Eraser</button>
+                        <button onClick={() => ctxRef.current?.clearRect(0, 0, 512, 512)} className="px-4 py-2 font-semibold text-white bg-red-500 rounded-full">Clear</button>
+                        <button onClick={handleSave} className="px-4 py-2 font-semibold text-white bg-green-500 rounded-full">Save</button>
+                    </div>
+
+                    <div className="relative w-full aspect-square bg-white border border-slate-300 rounded-lg shadow-inner">
+                        {isLoading && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-slate-100/80">
+                                <LoadingSpinner className="w-16 h-16 text-purple-600" />
+                            </div>
+                        )}
+                        {imageUrl && <img src={imageUrl} alt="Coloring page" className="absolute inset-0 w-full h-full object-contain" />}
+                        <canvas
+                            ref={canvasRef}
+                            width={512}
+                            height={512}
+                            className="absolute inset-0 w-full h-full"
+                            onMouseDown={startDrawing}
+                            onMouseUp={endDrawing}
+                            onMouseMove={draw}
+                            onMouseLeave={endDrawing}
+                        />
+                    </div>
                 </div>
-                {renderContent()}
             </main>
         </div>
     );
@@ -1262,8 +1132,8 @@ const App: React.FC = () => {
                         onSelectSettings={() => setCurrentMode('settings')} 
                     />;
         }
-        if (currentMode === 'voice-to-story') {
-            return <VoiceToStoryView buddy={selectedBuddy} onExit={handleExitToDashboard} />;
+        if (currentMode === 'coloring-book') {
+            return <ColoringBookView buddy={selectedBuddy} onExit={handleExitToDashboard} />;
         }
         
         return <ChatView mode={currentMode} buddy={selectedBuddy} onExit={handleExitToDashboard} />;
