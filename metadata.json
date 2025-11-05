@@ -1,0 +1,8 @@
+{
+  "name": "Askie Kids: AI Learning Buddy",
+  "description": "A fun, voice-driven AI learning buddy that helps children understand the world by answering their questions in simple, age-appropriate language with a friendly voice.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
