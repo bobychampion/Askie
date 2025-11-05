@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { ConversationStatus } from '../types';
 
@@ -120,35 +119,3 @@ export const StarIcon: React.FC<{ className?: string }> = ({ className }) => (
         <path fillRule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.006 5.404.434c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.434 2.082-5.006Z" clipRule="evenodd" />
     </svg>
 );
-
-// NaviMascot component, used in Chat/Story views
-export const NaviMascot: React.FC<{ status: ConversationStatus | string }> = ({ status }) => {
-    const isListening = status === ConversationStatus.LISTENING || status === ConversationStatus.THINKING;
-    const isSpeaking = status === ConversationStatus.SPEAKING;
-
-    return (
-        <div className="relative w-20 h-20">
-            {isListening && (
-                <div className="absolute inset-0 bg-purple-300 rounded-full animate-ping opacity-60"></div>
-            )}
-            <div className={`relative w-full h-full rounded-full bg-gradient-to-br from-purple-400 to-pink-400 shadow-lg transition-transform duration-300 ${isListening ? 'scale-105' : ''}`}>
-                <div className="absolute flex items-center justify-center w-full h-full">
-                    <div className="flex space-x-2">
-                        <div className={`w-2 h-4 bg-white rounded-full ${isSpeaking ? 'animate-[speak-left_1s_ease-in-out_infinite]' : ''}`}></div>
-                        <div className={`w-2 h-4 bg-white rounded-full ${isSpeaking ? 'animate-[speak-right_1s_ease-in-out_infinite]' : ''}`}></div>
-                    </div>
-                </div>
-            </div>
-             <style>{`
-                @keyframes speak-left {
-                    0%, 100% { transform: scaleY(1); }
-                    50% { transform: scaleY(0.4); }
-                }
-                @keyframes speak-right {
-                    0%, 100% { transform: scaleY(1); }
-                    50% { transform: scaleY(0.7); }
-                }
-            `}</style>
-        </div>
-    );
-};

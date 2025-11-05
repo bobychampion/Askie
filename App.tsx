@@ -3,9 +3,10 @@ import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, FunctionDeclarat
 import { ConversationStatus, Message, SessionRecord, Buddy } from './types';
 import { encode, decode, decodeAudioData, createBlob } from './utils/audio';
 import { 
-    MicrophoneIcon, StopIcon, LoadingSpinner, ThumbsUpIcon, ThumbsDownIcon, NaviMascot, ArrowLeftIcon, CameraIcon,
+    MicrophoneIcon, StopIcon, LoadingSpinner, ThumbsUpIcon, ThumbsDownIcon, ArrowLeftIcon, CameraIcon,
     FireIcon, SettingsIcon, TextLearningIcon, HomeworkHelperIcon, LearningGamesIcon, ReadLearnIcon, VoiceTutorIcon, BrainChallengesIcon, CreativeStudioIcon, ChallengeMedalIcon, StarIcon 
 } from './components/Icons';
+import { Mascot } from './components/Mascot';
 
 export type AppMode = 'homework' | 'free-chat' | 'learning' | 'voice-to-story' | 'read-and-learn';
 const HISTORY_KEY = 'askie-kids-history';
@@ -820,7 +821,7 @@ If the user provides a picture of their homework, analyze it and follow the same
             </header>
             
             <main className="relative z-0 flex flex-col items-center flex-grow w-full max-w-2xl px-4 mx-auto overflow-hidden">
-                <div className="py-2"><NaviMascot status={status} /></div>
+                <div className="py-2"><Mascot status={status} /></div>
                 {status === ConversationStatus.LISTENING && <AudioVisualizer volume={micVolume} />}
                 
                 <div id="conversation-box" className="w-full overflow-y-auto flex-grow mb-2">
@@ -1179,7 +1180,7 @@ const VoiceToStoryView: React.FC<{ buddy: Buddy; onExit: () => void; }> = ({ bud
             </header>
             <main className="relative z-0 flex flex-col items-center flex-grow w-full px-4 mx-auto overflow-hidden">
                 <div className="py-2">
-                    <NaviMascot status={status === 'RECORDING' ? 'LISTENING' : 'IDLE'} />
+                    <Mascot status={status === 'RECORDING' ? ConversationStatus.LISTENING : ConversationStatus.IDLE} />
                 </div>
                 {renderContent()}
             </main>
